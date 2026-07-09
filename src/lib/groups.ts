@@ -76,20 +76,21 @@ export async function getActiveGroupOrderForCurrentUser(): Promise<{
     .from("group_members")
     .select(
       `
-      role,
-      group_order:group_orders (
-        id,
-        name,
-        host_user_id,
-        invite_code,
-        status,
-        created_at,
-        checked_out_at
-      )
-    `,
+    role,
+    group_order:group_orders!inner (
+      id,
+      name,
+      host_user_id,
+      invite_code,
+      status,
+      created_at,
+      checked_out_at
+    )
+  `,
     )
     .eq("user_id", user.id)
     .eq("status", "active")
+    .eq("group_order.status", "open")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

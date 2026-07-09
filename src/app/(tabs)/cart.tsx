@@ -49,6 +49,7 @@ export default function CartScreen() {
   const renderCartItem = ({ item }: { item: CartItem }) => {
     return (
       <View style={styles.cartCard}>
+        <View style={styles.bannerContainer}></View>
         <View style={styles.itemTopRow}>
           <View style={styles.itemEmojiBox}>
             <Text style={styles.itemEmoji}>{item.menuItem.imageEmoji}</Text>
@@ -151,6 +152,10 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: "#F6F7FB",
+  },
+  bannerContainer: {
+    paddingHorizontal: 20,
+    marginBottom: 12,
   },
   listContent: {
     padding: 16,

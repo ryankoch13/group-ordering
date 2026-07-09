@@ -1,5 +1,7 @@
 import { router, Stack } from "expo-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+    ActivityIndicator,
     Alert,
     Pressable,
     ScrollView,
@@ -8,20 +10,69 @@ import {
     View,
 } from "react-native";
 
+import { checkoutGroupOrder, getCheckoutCartItems } from "@/lib/orders";
 import { useGroupOrderStore } from "@/store/groupOrderStore";
+import type { CheckoutCartItem } from "@/types/shop";
 import { formatCurrency } from "@/utils/money";
 
 export default function CheckoutScreen() {
-  const cart = useGroupOrderStore((state) => state.cart);
+  const activeGroupOrderId = useGroupOrderStore(
+    (state) => state.activeGroupOrderId,
+  );
   const isHost = useGroupOrderStore((state) => state.isHost);
-  const placeOrder = useGroupOrderStore((state) => state.placeOrder);
-
-  const totalCents = cart.reduce(
-    (total, item) => total + item.menuItem.priceCents * item.quantity,
-    0,
+  const setCart = useGroupOrderStore((state) => state.setCart);
+  const clearActiveGroup = useGroupOrderStore(
+    (state) => state.clearActiveGroup,
   );
 
-  const handlePlaceOrder = () => {
+  const [checkoutItems, setCheckoutItems] = useState<CheckoutCartItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const totalCents = useMemo(() => {
+    return checkoutItems.reduce(
+      (total, item) => total + item.menuItem.priceCents * item.quantity,
+      0,
+    );
+  }, [checkoutItems]);
+
+  const loadCheckoutItems = useCallback(async () => {
+    if (!activeGroupOrderId) {
+      setCheckoutItems([]);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const items = await getCheckoutCartItems(activeGroupOrderId);
+      setCheckoutItems(items);
+    } catch (error) {
+      console.log("LOAD CHECKOUT ITEMS ERROR:", error);
+
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not load checkout items.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [activeGroupOrderId]);
+
+  useEffect(() => {
+    loadCheckoutItems();
+  }, [loadCheckoutItems]);
+
+  const handlePlaceOrder = async () => {
+    if (!activeGroupOrderId) {
+      Alert.alert("No active group order", "Create a group order first.");
+      return;
+    }
+
     if (!isHost) {
       Alert.alert(
         "Host checkout only",
@@ -30,19 +81,33 @@ export default function CheckoutScreen() {
       return;
     }
 
-    const orderId = placeOrder();
-
-    if (!orderId) {
-      Alert.alert("Cart empty", "Add items before placing an order.");
+    if (checkoutItems.length === 0) {
+      Alert.alert("No items", "There are no items to checkout.");
       return;
     }
 
-    Alert.alert("Order placed", "Your group order has been submitted.", [
-      {
-        text: "View Orders",
-        onPress: () => router.replace("/(tabs)/orders"),
-      },
-    ]);
+    setPlacingOrder(true);
+
+    try {
+      await checkoutGroupOrder(activeGroupOrderId);
+
+      setCart([]);
+      clearActiveGroup();
+
+      Alert.alert("Order placed", "Your group order has been submitted.", [
+        {
+          text: "View Orders",
+          onPress: () => router.replace("/(tabs)/orders"),
+        },
+      ]);
+    } catch (error) {
+      Alert.alert(
+        "Could not place order",
+        error instanceof Error ? error.message : "Something went wrong.",
+      );
+    } finally {
+      setPlacingOrder(false);
+    }
   };
 
   return (
@@ -52,49 +117,99 @@ export default function CheckoutScreen() {
       <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
         <Text style={styles.title}>Checkout</Text>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Order Summary</Text>
+        {!isHost && (
+          <View style={styles.warningCard}>
+            <Text style={styles.warningTitle}>Host checkout only</Text>
+            <Text style={styles.warningText}>
+              You can view the summary, but only the host can place the final
+              order.
+            </Text>
+          </View>
+        )}
 
-          {cart.map((item) => (
-            <View key={item.menuItem.id} style={styles.summaryRow}>
-              <View style={styles.summaryLeft}>
-                <Text style={styles.itemName}>{item.menuItem.name}</Text>
-                <Text style={styles.itemMeta}>Qty {item.quantity}</Text>
+        {loading ? (
+          <View style={styles.centerBox}>
+            <ActivityIndicator color="#2563EB" />
+            <Text style={styles.loadingText}>Loading checkout...</Text>
+          </View>
+        ) : errorMessage ? (
+          <View style={styles.centerBox}>
+            <Text style={styles.errorTitle}>Could not load checkout</Text>
+            <Text style={styles.errorText}>{errorMessage}</Text>
+
+            <Pressable
+              style={styles.secondaryButton}
+              onPress={loadCheckoutItems}
+            >
+              <Text style={styles.secondaryButtonText}>Try Again</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <>
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Group Order Summary</Text>
+
+              {checkoutItems.length === 0 ? (
+                <Text style={styles.placeholderText}>
+                  No one has added items to this group order yet.
+                </Text>
+              ) : (
+                checkoutItems.map((item) => (
+                  <View
+                    key={`${item.userId}-${item.menuItem.id}`}
+                    style={styles.summaryRow}
+                  >
+                    <View style={styles.summaryLeft}>
+                      <Text style={styles.itemName}>{item.menuItem.name}</Text>
+                      <Text style={styles.itemMeta}>
+                        Qty {item.quantity} · User {item.userId.slice(0, 8)}
+                      </Text>
+                    </View>
+
+                    <Text style={styles.itemTotal}>
+                      {formatCurrency(item.menuItem.priceCents * item.quantity)}
+                    </Text>
+                  </View>
+                ))
+              )}
+
+              <View style={styles.divider} />
+
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Total</Text>
+                <Text style={styles.totalValue}>
+                  {formatCurrency(totalCents)}
+                </Text>
               </View>
+            </View>
 
-              <Text style={styles.itemTotal}>
-                {formatCurrency(item.menuItem.priceCents * item.quantity)}
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>Payment</Text>
+              <Text style={styles.placeholderText}>
+                Payment is mocked for now. Later, this can become a Stripe or
+                restaurant checkout step.
               </Text>
             </View>
-          ))}
 
-          <View style={styles.divider} />
-
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalValue}>{formatCurrency(totalCents)}</Text>
-          </View>
-        </View>
-
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Payment</Text>
-          <Text style={styles.placeholderText}>
-            Payment is mocked for now. The host will eventually complete payment
-            here after reviewing everyone’s items.
-          </Text>
-        </View>
-
-        <Pressable
-          style={[
-            styles.placeOrderButton,
-            !isHost && styles.placeOrderButtonDisabled,
-          ]}
-          onPress={handlePlaceOrder}
-        >
-          <Text style={styles.placeOrderButtonText}>
-            {isHost ? "Place Order" : "Only Host Can Checkout"}
-          </Text>
-        </Pressable>
+            <Pressable
+              style={[
+                styles.placeOrderButton,
+                (!isHost || checkoutItems.length === 0 || placingOrder) &&
+                  styles.placeOrderButtonDisabled,
+              ]}
+              onPress={handlePlaceOrder}
+              disabled={!isHost || checkoutItems.length === 0 || placingOrder}
+            >
+              {placingOrder ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.placeOrderButtonText}>
+                  {isHost ? "Place Order" : "Only Host Can Checkout"}
+                </Text>
+              )}
+            </Pressable>
+          </>
+        )}
       </ScrollView>
     </>
   );
@@ -122,6 +237,58 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E5E7EB",
     marginBottom: 14,
+  },
+  warningCard: {
+    backgroundColor: "#FFFBEB",
+    borderRadius: 16,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "#FDE68A",
+    marginBottom: 14,
+  },
+  warningTitle: {
+    color: "#92400E",
+    fontWeight: "900",
+    marginBottom: 4,
+  },
+  warningText: {
+    color: "#92400E",
+    lineHeight: 20,
+  },
+  centerBox: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 18,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    alignItems: "center",
+  },
+  loadingText: {
+    color: "#6B7280",
+    fontWeight: "700",
+    marginTop: 10,
+  },
+  errorTitle: {
+    color: "#111827",
+    fontWeight: "900",
+    fontSize: 18,
+    marginBottom: 6,
+  },
+  errorText: {
+    color: "#6B7280",
+    textAlign: "center",
+    lineHeight: 22,
+    marginBottom: 14,
+  },
+  secondaryButton: {
+    backgroundColor: "#EFF6FF",
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 999,
+  },
+  secondaryButtonText: {
+    color: "#2563EB",
+    fontWeight: "900",
   },
   sectionTitle: {
     fontSize: 18,
