@@ -18,10 +18,10 @@ import {
   getItemName,
   getItemTotalCents,
   getOrders,
+  getOrderStatusLabel,
   getOrderTotalCents,
   OrderStatus,
   OrderWithItems,
-  statusLabels,
   subscribeToOrders,
   unsubscribeFromOrders,
 } from "@/lib/orders";
@@ -177,7 +177,7 @@ function OrderCard({
 
           <View style={[styles.statusBadge, getStatusBadgeStyle(order.status)]}>
             <Text style={styles.statusText}>
-              {statusLabels[order.status] ?? order.status}
+              {getOrderStatusLabel(order.status) ?? order.status}
             </Text>
           </View>
         </View>
