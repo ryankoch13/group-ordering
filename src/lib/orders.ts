@@ -2,11 +2,13 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 
 import { supabase } from "@/lib/supabase";
 
-export enum OrderStatus {
-  Placed = "placed",
-  Completed = "completed",
-  Cancelled = "cancelled",
-}
+export const OrderStatus = {
+  Placed: "placed",
+  Completed: "completed",
+  Cancelled: "cancelled",
+} as const;
+
+export type OrderStatusValue = (typeof OrderStatus)[keyof typeof OrderStatus];
 
 export type OrderRow = {
   id: string;
@@ -14,7 +16,7 @@ export type OrderRow = {
   host_user_id?: string | null;
   host_id?: string | null;
   user_id?: string | null;
-  status: OrderStatus;
+  status: OrderStatusValue | string;
   total_cents?: number | null;
   total_amount?: number | null;
   created_at: string;
@@ -34,21 +36,28 @@ export type OrderItemRow = {
 };
 
 export type OrderWithItems = OrderRow & {
+  host_id: string | null;
   items: OrderItemRow[];
-  host_id?: string | null;
 };
 
 type GroupOrderHostRow = {
-  host_id?: string | null;
-  user_id?: string | null;
-  created_by?: string | null;
+  id: string;
+  host_user_id: string | null;
 };
 
-export const statusLabels: Record<OrderStatus, string> = {
+export const statusLabels: Record<OrderStatusValue, string> = {
   [OrderStatus.Placed]: "Placed",
   [OrderStatus.Completed]: "Completed",
   [OrderStatus.Cancelled]: "Cancelled",
 };
+
+export function getOrderStatusLabel(status: string | null | undefined) {
+  if (!status) {
+    return "Unknown";
+  }
+
+  return statusLabels[status as OrderStatusValue] ?? capitalize(status);
+}
 
 export async function getCurrentUserId() {
   const {
@@ -113,24 +122,6 @@ async function hydrateOrders(orderRows: OrderRow[]): Promise<OrderWithItems[]> {
     }
 
     itemRows = (data ?? []) as OrderItemRow[];
-
-    return orderRows.map((order) => {
-      const groupOrderHostId = order.group_order_id
-        ? hostIdsByGroupOrderId[order.group_order_id]
-        : null;
-
-      return {
-        ...order,
-        status: order.status as OrderStatus,
-        host_id:
-          order.host_user_id ??
-          order.host_id ??
-          groupOrderHostId ??
-          order.user_id ??
-          null,
-        items: itemsByOrderId[order.id] ?? [],
-      };
-    });
   }
 
   const itemsByOrderId = itemRows.reduce<Record<string, OrderItemRow[]>>(
@@ -154,8 +145,12 @@ async function hydrateOrders(orderRows: OrderRow[]): Promise<OrderWithItems[]> {
 
     return {
       ...order,
-      status: order.status as OrderStatus,
-      host_id: order.host_id ?? groupOrderHostId ?? order.user_id ?? null,
+      host_id:
+        order.host_user_id ??
+        order.host_id ??
+        groupOrderHostId ??
+        order.user_id ??
+        null,
       items: itemsByOrderId[order.id] ?? [],
     };
   });
@@ -174,38 +169,27 @@ async function getHostIdsByGroupOrderId(orderRows: OrderRow[]) {
     return {};
   }
 
-  /*
-    This tries to support a few common column names:
-    - host_id
-    - user_id
-    - created_by
-
-    If your group_orders table does not exist, or RLS blocks this read,
-    the app will still work. It just will not show host-only controls unless
-    orders.host_id or orders.user_id is available.
-  */
   const { data, error } = await supabase
     .from("group_orders")
-    .select("id, host_id, user_id, created_by")
+    .select("id, host_user_id")
     .in("id", groupOrderIds);
 
   if (error || !data) {
+    console.warn("Could not load group order hosts:", error);
     return {};
   }
 
-  return data.reduce<Record<string, string | null>>((acc, row) => {
-    const groupOrder = row as GroupOrderHostRow & { id: string };
-
-    acc[groupOrder.id] =
-      groupOrder.host_id ?? groupOrder.user_id ?? groupOrder.created_by ?? null;
-
+  return ((data ?? []) as GroupOrderHostRow[]).reduce<
+    Record<string, string | null>
+  >((acc, row) => {
+    acc[row.id] = row.host_user_id;
     return acc;
   }, {});
 }
 
 export async function updateOrderStatus(
   orderId: string,
-  status: OrderStatus.Completed | OrderStatus.Cancelled,
+  status: typeof OrderStatus.Completed | typeof OrderStatus.Cancelled,
 ) {
   const currentUserId = await getCurrentUserId();
 
@@ -217,6 +201,10 @@ export async function updateOrderStatus(
 
   if (!canManageOrder(order, currentUserId)) {
     throw new Error("Only the host can update this order.");
+  }
+
+  if (order.status !== OrderStatus.Placed) {
+    throw new Error("Only placed orders can be updated.");
   }
 
   const { error } = await supabase
@@ -239,7 +227,7 @@ export function canManageOrder(
     return false;
   }
 
-  return order.host_id === userId;
+  return order.host_id === userId || order.host_user_id === userId;
 }
 
 export function getItemName(item: OrderItemRow) {
@@ -312,7 +300,9 @@ export function subscribeToOrders(onChange: () => void) {
         schema: "public",
         table: "orders",
       },
-      onChange,
+      () => {
+        onChange();
+      },
     )
     .on(
       "postgres_changes",
@@ -321,7 +311,9 @@ export function subscribeToOrders(onChange: () => void) {
         schema: "public",
         table: "order_items",
       },
-      onChange,
+      () => {
+        onChange();
+      },
     )
     .subscribe();
 }
@@ -337,7 +329,9 @@ export function subscribeToOrder(orderId: string, onChange: () => void) {
         table: "orders",
         filter: `id=eq.${orderId}`,
       },
-      onChange,
+      () => {
+        onChange();
+      },
     )
     .on(
       "postgres_changes",
@@ -347,11 +341,17 @@ export function subscribeToOrder(orderId: string, onChange: () => void) {
         table: "order_items",
         filter: `order_id=eq.${orderId}`,
       },
-      onChange,
+      () => {
+        onChange();
+      },
     )
     .subscribe();
 }
 
 export function unsubscribeFromOrders(channel: RealtimeChannel) {
-  supabase.removeChannel(channel);
+  void supabase.removeChannel(channel);
+}
+
+function capitalize(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }

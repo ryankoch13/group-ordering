@@ -7,116 +7,116 @@ export type ActiveGroupOrder = {
   isHost: boolean;
 };
 
-async function withTimeout<T>(
-  promise: PromiseLike<T>,
-  timeoutMs: number,
-  label: string,
-): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+type GroupOrderRow = {
+  id: string;
+  name: string | null;
+  host_user_id: string | null;
+  checked_out_at: string | null;
+};
 
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(`${label} timed out`));
-    }, timeoutMs);
-  });
+type GroupMemberRow = {
+  id: string;
+  group_order_id: string;
+  user_id: string | null;
+  status: string | null;
+};
 
-  try {
-    return await Promise.race([promise, timeoutPromise]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
+async function getCurrentUserId() {
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+
+  if (error) {
+    throw error;
   }
+
+  return user?.id ?? null;
 }
 
 export async function getActiveGroupOrder(): Promise<ActiveGroupOrder | null> {
-  const authResult = await withTimeout(
-    supabase.auth.getUser(),
-    8000,
-    "Auth lookup",
-  );
-
-  if (authResult.error) {
-    throw authResult.error;
-  }
-
-  const userId = authResult.data.user?.id;
+  const userId = await getCurrentUserId();
 
   if (!userId) {
     return null;
   }
 
-  const hostedResult = await withTimeout(
-    supabase
-      .from("group_orders")
-      .select("id, name, host_user_id, status, checked_out_at")
-      .eq("host_user_id", userId)
-      .is("checked_out_at", null)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    8000,
-    "Hosted group order lookup",
-  );
+  const hostedGroupOrder = await getHostedActiveGroupOrder(userId);
 
-  if (hostedResult.error) {
-    throw hostedResult.error;
-  }
-
-  if (hostedResult.data) {
+  if (hostedGroupOrder) {
     return {
-      id: hostedResult.data.id,
-      name: hostedResult.data.name,
-      hostUserId: hostedResult.data.host_user_id,
+      id: hostedGroupOrder.id,
+      name: hostedGroupOrder.name,
+      hostUserId: hostedGroupOrder.host_user_id,
       isHost: true,
     };
   }
 
-  const memberResult = await withTimeout(
-    supabase
-      .from("group_members")
-      .select("group_order_id")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle(),
-    8000,
-    "Group member lookup",
-  );
+  const memberGroupOrder = await getMemberActiveGroupOrder(userId);
 
-  if (memberResult.error) {
-    throw memberResult.error;
-  }
-
-  const groupOrderId = memberResult.data?.group_order_id;
-
-  if (!groupOrderId) {
-    return null;
-  }
-
-  const groupResult = await withTimeout(
-    supabase
-      .from("group_orders")
-      .select("id, name, host_user_id, status, checked_out_at")
-      .eq("id", groupOrderId)
-      .is("checked_out_at", null)
-      .maybeSingle(),
-    8000,
-    "Member group order lookup",
-  );
-
-  if (groupResult.error) {
-    throw groupResult.error;
-  }
-
-  if (!groupResult.data) {
+  if (!memberGroupOrder) {
     return null;
   }
 
   return {
-    id: groupResult.data.id,
-    name: groupResult.data.name,
-    hostUserId: groupResult.data.host_user_id,
-    isHost: groupResult.data.host_user_id === userId,
+    id: memberGroupOrder.id,
+    name: memberGroupOrder.name,
+    hostUserId: memberGroupOrder.host_user_id,
+    isHost: memberGroupOrder.host_user_id === userId,
   };
+}
+
+async function getHostedActiveGroupOrder(
+  userId: string,
+): Promise<GroupOrderRow | null> {
+  const { data, error } = await supabase
+    .from("group_orders")
+    .select("id, name, host_user_id, checked_out_at")
+    .eq("host_user_id", userId)
+    .is("checked_out_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return (data as GroupOrderRow | null) ?? null;
+}
+
+async function getMemberActiveGroupOrder(
+  userId: string,
+): Promise<GroupOrderRow | null> {
+  const { data: memberRow, error: memberError } = await supabase
+    .from("group_members")
+    .select("id, group_order_id, user_id, status")
+    .eq("user_id", userId)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (memberError) {
+    throw memberError;
+  }
+
+  const typedMemberRow = (memberRow as GroupMemberRow | null) ?? null;
+
+  if (!typedMemberRow?.group_order_id) {
+    return null;
+  }
+
+  const { data: groupOrderRow, error: groupOrderError } = await supabase
+    .from("group_orders")
+    .select("id, name, host_user_id, checked_out_at")
+    .eq("id", typedMemberRow.group_order_id)
+    .is("checked_out_at", null)
+    .maybeSingle();
+
+  if (groupOrderError) {
+    throw groupOrderError;
+  }
+
+  return (groupOrderRow as GroupOrderRow | null) ?? null;
 }
