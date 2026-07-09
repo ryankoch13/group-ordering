@@ -179,7 +179,7 @@ export default function MenuScreen() {
 
         const { data: existingCartItem, error: existingError } = await supabase
           .from("cart_items")
-          .select("*")
+          .select("id, quantity")
           .eq("group_order_id", activeGroupOrder.id)
           .eq("user_id", currentUserId)
           .eq("menu_item_id", item.id)
@@ -190,14 +190,12 @@ export default function MenuScreen() {
         }
 
         if (existingCartItem) {
-          const cartItem = existingCartItem as CartItemRow;
-
           const { error: updateError } = await supabase
             .from("cart_items")
             .update({
-              quantity: (cartItem.quantity ?? 1) + 1,
+              quantity: (existingCartItem.quantity ?? 1) + 1,
             })
-            .eq("id", cartItem.id);
+            .eq("id", existingCartItem.id);
 
           if (updateError) {
             throw updateError;
@@ -218,7 +216,10 @@ export default function MenuScreen() {
         }
       } catch (error) {
         console.error("Failed to add item to cart:", error);
-        Alert.alert("Could not add item", "Please try again.");
+        Alert.alert(
+          "Could not add item",
+          error instanceof Error ? error.message : "Please try again.",
+        );
       } finally {
         setAddingItemId(null);
       }
