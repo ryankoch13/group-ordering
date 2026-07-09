@@ -1,13 +1,13 @@
 import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Pressable,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    View,
+  ActivityIndicator,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
 } from "react-native";
 
 import { supabase } from "@/lib/supabase";
@@ -114,8 +114,10 @@ export default function GroupConfirmationScreen() {
       setCurrentUserId(user.id);
 
       if (!groupOrderId) {
-        setErrorMessage("No group order id was provided.");
-        return;
+        if (!groupOrderId) {
+          router.replace("/(tabs)/profile");
+          return;
+        }
       }
 
       const groupOrderResult = await withTimeout(
