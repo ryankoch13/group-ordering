@@ -1,16 +1,16 @@
-import { Link } from "expo-router";
+import { Link, router } from "expo-router";
 import { useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 
 import { useAuth } from "@/providers/AuthProvider";
@@ -34,6 +34,7 @@ export default function LoginScreen() {
     try {
       setSubmitting(true);
       await signIn(trimmedEmail, password);
+      router.replace("/(tabs)/menu");
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unable to sign in.";
