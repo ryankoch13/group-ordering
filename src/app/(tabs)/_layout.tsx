@@ -1,53 +1,59 @@
-import { Redirect, Tabs } from "expo-router";
-import { ActivityIndicator, StyleSheet, View } from "react-native";
-
-import { useAuth } from "@/providers/AuthProvider";
+import { Tabs } from "expo-router";
 
 export default function TabsLayout() {
-  const { session, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
-
-  if (!session) {
-    return <Redirect href="/login" />;
-  }
-
   return (
     <Tabs
       screenOptions={{
-        headerStyle: {
-          backgroundColor: "#111111",
+        headerShown: true,
+        tabBarActiveTintColor: "#2563EB",
+        tabBarInactiveTintColor: "#6B7280",
+        tabBarLabelStyle: {
+          fontSize: 12,
+          fontWeight: "600",
         },
-        headerTintColor: "#FFFFFF",
         tabBarStyle: {
-          backgroundColor: "#111111",
-          borderTopColor: "#2A2A2A",
+          borderTopColor: "#E5E7EB",
         },
-        tabBarActiveTintColor: "#A78BFA",
-        tabBarInactiveTintColor: "#8A8A8A",
       }}
     >
       <Tabs.Screen
-        name="index"
+        name="menu"
+        options={{
+          title: "Menu",
+          tabBarLabel: "Menu",
+        }}
+      />
+
+      <Tabs.Screen
+        name="cart"
+        options={{
+          title: "Cart",
+          tabBarLabel: "Cart",
+        }}
+      />
+
+      <Tabs.Screen
+        name="orders"
         options={{
           title: "Orders",
           tabBarLabel: "Orders",
         }}
       />
+
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: "Profile",
+          tabBarLabel: "Profile",
+        }}
+      />
+
+      <Tabs.Screen
+        name="index"
+        options={{
+          href: null,
+        }}
+      />
     </Tabs>
   );
 }
-
-const styles = StyleSheet.create({
-  center: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-});
