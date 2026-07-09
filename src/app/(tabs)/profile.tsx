@@ -1,222 +1,598 @@
-import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
+    KeyboardAvoidingView,
+    Platform,
     Pressable,
+    SafeAreaView,
+    ScrollView,
     StyleSheet,
     Text,
     TextInput,
     View,
 } from "react-native";
 
-import { useActiveGroupOrderSync } from "@/hooks/useActiveGroupOrderSync";
-import { createHostedGroupOrder } from "@/lib/groups";
 import { supabase } from "@/lib/supabase";
-import { useGroupOrderStore } from "@/store/groupOrderStore";
+
+type ProfileRow = {
+  id: string;
+  email: string | null;
+  display_name: string | null;
+  created_at?: string | null;
+};
+
+type GroupOrderRow = {
+  id: string;
+  name: string | null;
+  host_user_id: string | null;
+  invite_code: string | null;
+  status: string | null;
+  created_at: string | null;
+  checked_out_at?: string | null;
+};
+
+function generateInviteCode() {
+  return Math.random().toString(36).slice(2, 8).toUpperCase();
+}
 
 export default function ProfileScreen() {
-  const [email, setEmail] = useState<string>("Loading...");
-  const [newGroupName, setNewGroupName] = useState("");
+  const [profile, setProfile] = useState<ProfileRow | null>(null);
+  const [activeGroupOrder, setActiveGroupOrder] =
+    useState<GroupOrderRow | null>(null);
+  const [groupName, setGroupName] = useState("");
+  const [inviteCode, setInviteCode] = useState("");
+  const [loading, setLoading] = useState(true);
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [joiningGroup, setJoiningGroup] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const activeGroupOrderId = useGroupOrderStore(
-    (state) => state.activeGroupOrderId,
-  );
-  const groupName = useGroupOrderStore((state) => state.groupName);
-  const inviteCode = useGroupOrderStore((state) => state.inviteCode);
-  const isHost = useGroupOrderStore((state) => state.isHost);
-  const setActiveGroup = useGroupOrderStore((state) => state.setActiveGroup);
-  const clearActiveGroup = useGroupOrderStore(
-    (state) => state.clearActiveGroup,
-  );
+  const loadProfile = useCallback(async () => {
+    try {
+      setLoading(true);
+      setErrorMessage(null);
 
-  const { loading: loadingGroup, errorMessage } = useActiveGroupOrderSync();
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-  useEffect(() => {
-    let mounted = true;
+      if (userError) {
+        throw userError;
+      }
 
-    const loadUser = async () => {
-      const { data, error } = await supabase.auth.getUser();
-
-      if (!mounted) {
+      if (!user) {
+        router.replace("/login");
         return;
       }
 
-      if (error) {
-        setEmail("Could not load user");
+      const { data: profileRow, error: profileError } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (profileError) {
+        throw profileError;
+      }
+
+      setProfile(
+        (profileRow as ProfileRow | null) ?? {
+          id: user.id,
+          email: user.email ?? null,
+          display_name: null,
+        },
+      );
+
+      const { data: hostedGroupRows, error: hostedError } = await supabase
+        .from("group_orders")
+        .select("*")
+        .eq("host_user_id", user.id)
+        .is("checked_out_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (hostedError) {
+        throw hostedError;
+      }
+
+      if (hostedGroupRows?.[0]) {
+        setActiveGroupOrder(hostedGroupRows[0] as GroupOrderRow);
         return;
       }
 
-      setEmail(data.user?.email ?? "Not signed in");
-    };
+      const { data: memberRows, error: memberError } = await supabase
+        .from("group_members")
+        .select("group_order_id")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(1);
 
-    loadUser();
+      if (memberError) {
+        throw memberError;
+      }
 
-    return () => {
-      mounted = false;
-    };
+      const memberGroupOrderId = memberRows?.[0]?.group_order_id;
+
+      if (!memberGroupOrderId) {
+        setActiveGroupOrder(null);
+        return;
+      }
+
+      const { data: memberGroupOrder, error: memberGroupError } = await supabase
+        .from("group_orders")
+        .select("*")
+        .eq("id", memberGroupOrderId)
+        .is("checked_out_at", null)
+        .maybeSingle();
+
+      if (memberGroupError) {
+        throw memberGroupError;
+      }
+
+      setActiveGroupOrder((memberGroupOrder as GroupOrderRow | null) ?? null);
+    } catch (error) {
+      console.error("Failed to load profile:", error);
+      setErrorMessage(
+        error instanceof Error ? error.message : "Could not load profile.",
+      );
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const handleCreateGroupOrder = async () => {
-    setCreatingGroup(true);
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, [loadProfile]),
+  );
+
+  const createGroupOrder = useCallback(async () => {
+    const trimmedName = groupName.trim();
+
+    if (!trimmedName) {
+      Alert.alert("Group name required", "Please enter a group order name.");
+      return;
+    }
 
     try {
-      const { group, currentUserId } =
-        await createHostedGroupOrder(newGroupName);
+      setCreatingGroup(true);
+      setErrorMessage(null);
 
-      setActiveGroup(group, currentUserId);
-      setNewGroupName("");
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-      Alert.alert("Group order created", "You can now invite people to join.");
+      if (userError) {
+        throw userError;
+      }
+
+      if (!user) {
+        throw new Error("You need to be signed in to create a group order.");
+      }
+
+      const generatedInviteCode = generateInviteCode();
+
+      const { data: groupOrder, error: groupOrderError } = await supabase
+        .from("group_orders")
+        .insert({
+          name: trimmedName,
+          host_user_id: user.id,
+          invite_code: generatedInviteCode,
+          status: "open",
+        })
+        .select("*")
+        .single();
+
+      if (groupOrderError) {
+        throw groupOrderError;
+      }
+
+      const typedGroupOrder = groupOrder as GroupOrderRow;
+
+      const { error: memberError } = await supabase
+        .from("group_members")
+        .insert({
+          group_order_id: typedGroupOrder.id,
+          user_id: user.id,
+          invited_email: user.email ?? null,
+          role: "host",
+          status: "joined",
+        });
+
+      if (memberError) {
+        throw memberError;
+      }
+
+      setGroupName("");
+
+      router.replace({
+        pathname: "/group-confirmation",
+        params: {
+          groupOrderId: typedGroupOrder.id,
+          mode: "created",
+        },
+      });
     } catch (error) {
-      console.log("PROFILE CREATE GROUP ERROR:", error);
-
+      console.error("Failed to create group order:", error);
       Alert.alert(
         "Could not create group order",
-        error instanceof Error ? error.message : "Something went wrong.",
+        error instanceof Error ? error.message : "Please try again.",
       );
     } finally {
       setCreatingGroup(false);
     }
-  };
+  }, [groupName]);
 
-  const handleSignOut = async () => {
-    const { error } = await supabase.auth.signOut();
+  const joinGroupOrder = useCallback(async () => {
+    const trimmedInviteCode = inviteCode.trim().toUpperCase();
 
-    if (error) {
-      Alert.alert("Sign out failed", error.message);
+    if (!trimmedInviteCode) {
+      Alert.alert("Invite code required", "Please enter an invite code.");
       return;
     }
 
-    clearActiveGroup();
-    router.replace("/login");
-  };
+    try {
+      setJoiningGroup(true);
+      setErrorMessage(null);
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) {
+        throw userError;
+      }
+
+      if (!user) {
+        throw new Error("You need to be signed in to join a group order.");
+      }
+
+      const { data: groupOrder, error: groupOrderError } = await supabase
+        .from("group_orders")
+        .select("*")
+        .eq("invite_code", trimmedInviteCode)
+        .is("checked_out_at", null)
+        .maybeSingle();
+
+      if (groupOrderError) {
+        throw groupOrderError;
+      }
+
+      if (!groupOrder) {
+        Alert.alert(
+          "Group order not found",
+          "Check the invite code and try again.",
+        );
+        return;
+      }
+
+      const typedGroupOrder = groupOrder as GroupOrderRow;
+
+      const { data: existingMember, error: existingMemberError } =
+        await supabase
+          .from("group_members")
+          .select("*")
+          .eq("group_order_id", typedGroupOrder.id)
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+      if (existingMemberError) {
+        throw existingMemberError;
+      }
+
+      if (!existingMember) {
+        const { data: invitedMember, error: invitedMemberError } =
+          await supabase
+            .from("group_members")
+            .select("*")
+            .eq("group_order_id", typedGroupOrder.id)
+            .eq("invited_email", user.email ?? "")
+            .is("user_id", null)
+            .maybeSingle();
+
+        if (invitedMemberError) {
+          throw invitedMemberError;
+        }
+
+        if (invitedMember) {
+          const { error: updateMemberError } = await supabase
+            .from("group_members")
+            .update({
+              user_id: user.id,
+              status: "joined",
+            })
+            .eq("id", invitedMember.id);
+
+          if (updateMemberError) {
+            throw updateMemberError;
+          }
+        } else {
+          const { error: insertMemberError } = await supabase
+            .from("group_members")
+            .insert({
+              group_order_id: typedGroupOrder.id,
+              user_id: user.id,
+              invited_email: user.email ?? null,
+              role: "guest",
+              status: "joined",
+            });
+
+          if (insertMemberError) {
+            throw insertMemberError;
+          }
+        }
+      }
+
+      setInviteCode("");
+
+      router.replace({
+        pathname: "/group-confirmation",
+        params: {
+          groupOrderId: typedGroupOrder.id,
+          mode: "joined",
+        },
+      });
+    } catch (error) {
+      console.error("Failed to join group order:", error);
+      Alert.alert(
+        "Could not join group order",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setJoiningGroup(false);
+    }
+  }, [inviteCode]);
+
+  const signOut = useCallback(async () => {
+    try {
+      setSigningOut(true);
+
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        throw error;
+      }
+
+      router.replace("/login");
+    } catch (error) {
+      console.error("Failed to sign out:", error);
+      Alert.alert(
+        "Could not sign out",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setSigningOut(false);
+    }
+  }, []);
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.screen}>
+        <View style={styles.centered}>
+          <ActivityIndicator />
+          <Text style={styles.loadingText}>Loading profile...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <View style={styles.screen}>
-      <View style={styles.profileCard}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {email && email !== "Loading..."
-              ? email.charAt(0).toUpperCase()
-              : "?"}
-          </Text>
-        </View>
-
-        <Text style={styles.email}>{email}</Text>
-        <Text style={styles.role}>{isHost ? "Host" : "Guest"}</Text>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Current Group</Text>
-
-        {loadingGroup ? (
-          <View style={styles.loadingRow}>
-            <ActivityIndicator color="#2563EB" />
-            <Text style={styles.loadingText}>Loading group order...</Text>
+    <SafeAreaView style={styles.screen}>
+      <KeyboardAvoidingView
+        style={styles.keyboardView}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+      >
+        <ScrollView contentContainerStyle={styles.content}>
+          <View style={styles.header}>
+            <Text style={styles.title}>Profile</Text>
+            <Text style={styles.subtitle}>Create or join a group order.</Text>
           </View>
-        ) : errorMessage ? (
-          <Text style={styles.errorText}>{errorMessage}</Text>
-        ) : activeGroupOrderId ? (
-          <>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Order</Text>
-              <Text style={styles.infoValue}>{groupName}</Text>
-            </View>
 
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Role</Text>
-              <Text style={styles.infoValue}>{isHost ? "Host" : "Guest"}</Text>
+          {errorMessage ? (
+            <View style={styles.messageCard}>
+              <Text style={styles.errorText}>{errorMessage}</Text>
             </View>
+          ) : null}
 
-            <View style={styles.inviteBox}>
-              <Text style={styles.inviteLabel}>Invite Code</Text>
-              <Text selectable style={styles.inviteCode}>
-                {inviteCode}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Account</Text>
+            <Text style={styles.label}>Email</Text>
+            <Text style={styles.value}>
+              {profile?.email ?? "No email available"}
+            </Text>
+
+            {profile?.display_name ? (
+              <>
+                <Text style={[styles.label, styles.spacedLabel]}>
+                  Display name
+                </Text>
+                <Text style={styles.value}>{profile.display_name}</Text>
+              </>
+            ) : null}
+          </View>
+
+          {activeGroupOrder ? (
+            <View style={styles.activeGroupCard}>
+              <Text style={styles.cardEyebrow}>Active group order</Text>
+              <Text style={styles.activeGroupName}>
+                {activeGroupOrder.name ?? "Group order"}
               </Text>
-              <Text style={styles.inviteHint}>
-                People will use this code to join the group order.
-              </Text>
+
+              {activeGroupOrder.invite_code ? (
+                <Text style={styles.activeGroupInvite}>
+                  Invite code: {activeGroupOrder.invite_code}
+                </Text>
+              ) : null}
+
+              <View style={styles.activeGroupActions}>
+                <Pressable
+                  onPress={() => {
+                    router.push("/(tabs)/menu");
+                  }}
+                  style={({ pressed }) => [
+                    styles.primaryButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                >
+                  <Text style={styles.primaryButtonText}>Go to menu</Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => {
+                    router.push({
+                      pathname: "/group-confirmation",
+                      params: {
+                        groupOrderId: activeGroupOrder.id,
+                        mode:
+                          activeGroupOrder.host_user_id === profile?.id
+                            ? "created"
+                            : "joined",
+                      },
+                    });
+                  }}
+                  style={({ pressed }) => [
+                    styles.secondaryButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                >
+                  <Text style={styles.secondaryButtonText}>View details</Text>
+                </Pressable>
+              </View>
             </View>
-          </>
-        ) : (
-          <>
-            <Text style={styles.emptyGroupText}>
-              You are not in a group order yet. Create one to become the host.
+          ) : null}
+
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Create group order</Text>
+            <Text style={styles.cardText}>
+              Start a new group order and invite others with a code.
             </Text>
 
             <TextInput
-              value={newGroupName}
-              onChangeText={setNewGroupName}
-              placeholder="Example: Friday Lunch"
-              placeholderTextColor="#8A8A8A"
+              value={groupName}
+              onChangeText={setGroupName}
+              placeholder="Group order name"
+              placeholderTextColor="#9CA3AF"
+              autoCapitalize="words"
               style={styles.input}
             />
 
             <Pressable
-              style={[
-                styles.createButton,
-                creatingGroup && styles.buttonDisabled,
-              ]}
-              onPress={handleCreateGroupOrder}
               disabled={creatingGroup}
+              onPress={createGroupOrder}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                (pressed || creatingGroup) && styles.buttonPressed,
+              ]}
             >
               {creatingGroup ? (
                 <ActivityIndicator color="#FFFFFF" />
               ) : (
-                <Text style={styles.createButtonText}>Create Group Order</Text>
+                <Text style={styles.primaryButtonText}>Create group order</Text>
               )}
             </Pressable>
-          </>
-        )}
-      </View>
+          </View>
 
-      <Pressable style={styles.signOutButton} onPress={handleSignOut}>
-        <Text style={styles.signOutButtonText}>Sign Out</Text>
-      </Pressable>
-    </View>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Join group order</Text>
+            <Text style={styles.cardText}>
+              Enter an invite code from a host to join their order.
+            </Text>
+
+            <TextInput
+              value={inviteCode}
+              onChangeText={(value) => setInviteCode(value.toUpperCase())}
+              placeholder="Invite code"
+              placeholderTextColor="#9CA3AF"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              style={styles.input}
+            />
+
+            <Pressable
+              disabled={joiningGroup}
+              onPress={joinGroupOrder}
+              style={({ pressed }) => [
+                styles.secondaryButton,
+                (pressed || joiningGroup) && styles.buttonPressed,
+              ]}
+            >
+              {joiningGroup ? (
+                <ActivityIndicator />
+              ) : (
+                <Text style={styles.secondaryButtonText}>Join group order</Text>
+              )}
+            </Pressable>
+          </View>
+
+          <Pressable
+            disabled={signingOut}
+            onPress={signOut}
+            style={({ pressed }) => [
+              styles.signOutButton,
+              (pressed || signingOut) && styles.buttonPressed,
+            ]}
+          >
+            <Text style={styles.signOutButtonText}>
+              {signingOut ? "Signing out..." : "Sign out"}
+            </Text>
+          </Pressable>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: "#F6F7FB",
-    padding: 16,
+    backgroundColor: "#F8FAFC",
   },
-  profileCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
+  keyboardView: {
+    flex: 1,
+  },
+  content: {
     padding: 20,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "#E5E7EB",
-    marginBottom: 14,
+    paddingBottom: 40,
+    gap: 14,
   },
-  avatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: "#2563EB",
+  header: {
+    gap: 4,
+  },
+  title: {
+    color: "#111827",
+    fontSize: 32,
+    fontWeight: "900",
+  },
+  subtitle: {
+    color: "#6B7280",
+    fontSize: 15,
+  },
+  centered: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: 12,
   },
-  avatarText: {
-    color: "#FFFFFF",
-    fontSize: 30,
-    fontWeight: "900",
+  loadingText: {
+    color: "#6B7280",
+    marginTop: 12,
+    fontSize: 15,
   },
-  email: {
-    color: "#111827",
-    fontSize: 17,
-    fontWeight: "900",
+  messageCard: {
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FCA5A5",
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
   },
-  role: {
-    color: "#2563EB",
-    fontWeight: "900",
-    marginTop: 5,
+  errorText: {
+    color: "#B91C1C",
+    fontSize: 14,
+    fontWeight: "700",
   },
   card: {
     backgroundColor: "#FFFFFF",
@@ -224,102 +600,123 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: "#E5E7EB",
-    marginBottom: 14,
+    gap: 12,
+    shadowColor: "#000000",
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    elevation: 2,
   },
-  sectionTitle: {
-    color: "#111827",
-    fontSize: 18,
+  activeGroupCard: {
+    backgroundColor: "#EFF6FF",
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: "#BFDBFE",
+    gap: 10,
+  },
+  cardEyebrow: {
+    color: "#1D4ED8",
+    fontSize: 12,
     fontWeight: "900",
-    marginBottom: 12,
+    textTransform: "uppercase",
   },
-  loadingRow: {
-    flexDirection: "row",
-    alignItems: "center",
+  activeGroupName: {
+    color: "#111827",
+    fontSize: 20,
+    fontWeight: "900",
   },
-  loadingText: {
+  activeGroupInvite: {
+    color: "#1E40AF",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  activeGroupActions: {
+    gap: 10,
+    marginTop: 4,
+  },
+  cardTitle: {
+    color: "#111827",
+    fontSize: 20,
+    fontWeight: "900",
+  },
+  cardText: {
     color: "#6B7280",
-    fontWeight: "700",
-    marginLeft: 10,
-  },
-  errorText: {
-    color: "#EF4444",
+    fontSize: 14,
     lineHeight: 20,
   },
-  emptyGroupText: {
+  label: {
     color: "#6B7280",
-    lineHeight: 22,
-    marginBottom: 12,
+    fontSize: 12,
+    fontWeight: "900",
+    textTransform: "uppercase",
+  },
+  spacedLabel: {
+    marginTop: 4,
+  },
+  value: {
+    color: "#111827",
+    fontSize: 15,
+    fontWeight: "800",
   },
   input: {
-    borderWidth: 1,
+    backgroundColor: "#F9FAFB",
     borderColor: "#D1D5DB",
-    borderRadius: 12,
+    borderWidth: 1,
+    borderRadius: 14,
     paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontSize: 16,
+    paddingVertical: 12,
     color: "#111827",
-    backgroundColor: "#FFFFFF",
-    marginBottom: 12,
+    fontSize: 15,
   },
-  createButton: {
+  primaryButton: {
     backgroundColor: "#2563EB",
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: "center",
+    justifyContent: "center",
+    minHeight: 50,
   },
-  createButtonText: {
+  primaryButtonText: {
     color: "#FFFFFF",
-    fontWeight: "900",
-    fontSize: 16,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  infoRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 9,
-  },
-  infoLabel: {
-    color: "#6B7280",
-    fontWeight: "700",
-  },
-  infoValue: {
-    color: "#111827",
+    fontSize: 15,
     fontWeight: "900",
   },
-  inviteBox: {
-    marginTop: 12,
-    backgroundColor: "#EFF6FF",
+  secondaryButton: {
+    backgroundColor: "#FFFFFF",
+    borderColor: "#D1D5DB",
+    borderWidth: 1,
     borderRadius: 14,
-    padding: 14,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 50,
   },
-  inviteLabel: {
-    color: "#2563EB",
-    fontWeight: "900",
-    marginBottom: 6,
-  },
-  inviteCode: {
+  secondaryButtonText: {
     color: "#111827",
-    fontSize: 24,
+    fontSize: 15,
     fontWeight: "900",
-    letterSpacing: 2,
-  },
-  inviteHint: {
-    color: "#6B7280",
-    lineHeight: 20,
-    marginTop: 6,
   },
   signOutButton: {
-    backgroundColor: "#EF4444",
-    borderRadius: 16,
-    paddingVertical: 15,
+    backgroundColor: "#FEF2F2",
+    borderColor: "#FCA5A5",
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 14,
     alignItems: "center",
-    marginTop: 4,
+    justifyContent: "center",
+    minHeight: 50,
   },
   signOutButtonText: {
-    color: "#FFFFFF",
+    color: "#B91C1C",
+    fontSize: 15,
     fontWeight: "900",
-    fontSize: 16,
+  },
+  buttonPressed: {
+    opacity: 0.7,
+    transform: [{ scale: 0.995 }],
   },
 });

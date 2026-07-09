@@ -1,17 +1,17 @@
+import { Ionicons } from "@expo/vector-icons";
 import { Tabs } from "expo-router";
 
 export default function TabsLayout() {
+  console.log("TabsLayout mounted");
+
   return (
     <Tabs
       screenOptions={{
-        headerShown: true,
+        headerShown: false,
         tabBarActiveTintColor: "#2563EB",
         tabBarInactiveTintColor: "#6B7280",
-        tabBarLabelStyle: {
-          fontSize: 12,
-          fontWeight: "600",
-        },
         tabBarStyle: {
+          backgroundColor: "#FFFFFF",
           borderTopColor: "#E5E7EB",
         },
       }}
@@ -20,7 +20,9 @@ export default function TabsLayout() {
         name="menu"
         options={{
           title: "Menu",
-          tabBarLabel: "Menu",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="restaurant-outline" size={size} color={color} />
+          ),
         }}
       />
 
@@ -28,7 +30,9 @@ export default function TabsLayout() {
         name="cart"
         options={{
           title: "Cart",
-          tabBarLabel: "Cart",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="cart-outline" size={size} color={color} />
+          ),
         }}
       />
 
@@ -36,7 +40,9 @@ export default function TabsLayout() {
         name="orders"
         options={{
           title: "Orders",
-          tabBarLabel: "Orders",
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="receipt-outline" size={size} color={color} />
+          ),
         }}
       />
 
@@ -44,14 +50,9 @@ export default function TabsLayout() {
         name="profile"
         options={{
           title: "Profile",
-          tabBarLabel: "Profile",
-        }}
-      />
-
-      <Tabs.Screen
-        name="index"
-        options={{
-          href: null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="person-outline" size={size} color={color} />
+          ),
         }}
       />
     </Tabs>

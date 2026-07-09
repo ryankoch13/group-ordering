@@ -1,6 +1,11 @@
 import { create } from "zustand";
 
-import { CartItem, MenuItem, Order, OrderStatus } from "@/types/shop";
+import {
+  OrderStatus,
+  type CartItem,
+  type MenuItem,
+  type Order,
+} from "@/types/shop";
 
 type ActiveGroup = {
   id: string;
@@ -27,7 +32,10 @@ type GroupOrderStore = {
 
   setActiveGroup: (group: ActiveGroup, currentUserId: string) => void;
   clearActiveGroup: () => void;
+
   setCart: (cart: CartItem[]) => void;
+  setOrders: (orders: Order[]) => void;
+
   addToCart: (menuItem: MenuItem) => void;
   increaseQuantity: (menuItemId: string) => void;
   decreaseQuantity: (menuItemId: string) => void;
@@ -41,11 +49,10 @@ export const useGroupOrderStore = create<GroupOrderStore>((set, get) => ({
   groupName: "No active group order",
   inviteCode: null,
   isHost: false,
+
   cart: [],
   orders: [],
-  setCart: (cart) => {
-    set({ cart });
-  },
+
   setActiveGroup: (group, currentUserId) => {
     set((state) => {
       const isSameGroup = state.activeGroupOrderId === group.id;
@@ -67,7 +74,16 @@ export const useGroupOrderStore = create<GroupOrderStore>((set, get) => ({
       inviteCode: null,
       isHost: false,
       cart: [],
+      orders: [],
     });
+  },
+
+  setCart: (cart) => {
+    set({ cart });
+  },
+
+  setOrders: (orders) => {
+    set({ orders });
   },
 
   addToCart: (menuItem) => {
@@ -126,17 +142,29 @@ export const useGroupOrderStore = create<GroupOrderStore>((set, get) => ({
 
   placeOrder: () => {
     const cart = get().cart;
+    const activeGroupOrderId = get().activeGroupOrderId;
 
-    if (cart.length === 0) {
+    if (cart.length === 0 || !activeGroupOrderId) {
       return null;
     }
 
+    const orderId = `order-${Date.now()}`;
+
     const order: Order = {
-      id: `order-${Date.now()}`,
+      id: orderId,
+      groupOrderId: activeGroupOrderId,
+      hostUserId: "local",
       createdAt: new Date().toISOString(),
       status: OrderStatus.Placed,
       totalCents: getCartTotalCents(cart),
-      items: cart.map((item) => ({ ...item })),
+      items: cart.map((item) => ({
+        id: `${orderId}-${item.menuItem.id}`,
+        menuItemId: item.menuItem.id,
+        userId: null,
+        itemName: item.menuItem.name,
+        priceCents: item.menuItem.priceCents,
+        quantity: item.quantity,
+      })),
     };
 
     set((state) => ({
