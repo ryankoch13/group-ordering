@@ -1,20 +1,37 @@
 import { router, useFocusEffect } from "expo-router";
 import { useCallback, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 
 import { supabase } from "@/lib/supabase";
+
+const GroupMemberStatus = {
+  Invited: "invited",
+  Active: "active",
+  Removed: "removed",
+} as const;
+
+const GroupMemberRole = {
+  Host: "host",
+  Guest: "guest",
+} as const;
+
+type GroupMemberStatusValue =
+  (typeof GroupMemberStatus)[keyof typeof GroupMemberStatus];
+
+type GroupMemberRoleValue =
+  (typeof GroupMemberRole)[keyof typeof GroupMemberRole];
 
 type ProfileRow = {
   id: string;
@@ -31,6 +48,16 @@ type GroupOrderRow = {
   status: string | null;
   created_at: string | null;
   checked_out_at?: string | null;
+};
+
+type GroupMemberRow = {
+  id: string;
+  group_order_id: string;
+  user_id: string | null;
+  invited_email: string | null;
+  role: GroupMemberRoleValue | string | null;
+  status: GroupMemberStatusValue | string | null;
+  created_at?: string | null;
 };
 
 function generateInviteCode() {
@@ -107,6 +134,7 @@ export default function ProfileScreen() {
         .from("group_members")
         .select("group_order_id")
         .eq("user_id", user.id)
+        .eq("status", GroupMemberStatus.Active)
         .order("created_at", { ascending: false })
         .limit(1);
 
@@ -199,8 +227,8 @@ export default function ProfileScreen() {
           group_order_id: typedGroupOrder.id,
           user_id: user.id,
           invited_email: user.email ?? null,
-          role: "host",
-          status: "joined",
+          role: GroupMemberRole.Host,
+          status: GroupMemberStatus.Active,
         });
 
       if (memberError) {
@@ -279,13 +307,29 @@ export default function ProfileScreen() {
           .select("*")
           .eq("group_order_id", typedGroupOrder.id)
           .eq("user_id", user.id)
+          .neq("status", GroupMemberStatus.Removed)
           .maybeSingle();
 
       if (existingMemberError) {
         throw existingMemberError;
       }
 
-      if (!existingMember) {
+      if (existingMember) {
+        const typedExistingMember = existingMember as GroupMemberRow;
+
+        if (typedExistingMember.status !== GroupMemberStatus.Active) {
+          const { error: reactivateError } = await supabase
+            .from("group_members")
+            .update({
+              status: GroupMemberStatus.Active,
+            })
+            .eq("id", typedExistingMember.id);
+
+          if (reactivateError) {
+            throw reactivateError;
+          }
+        }
+      } else {
         const { data: invitedMember, error: invitedMemberError } =
           await supabase
             .from("group_members")
@@ -293,6 +337,7 @@ export default function ProfileScreen() {
             .eq("group_order_id", typedGroupOrder.id)
             .eq("invited_email", user.email ?? "")
             .is("user_id", null)
+            .eq("status", GroupMemberStatus.Invited)
             .maybeSingle();
 
         if (invitedMemberError) {
@@ -300,13 +345,15 @@ export default function ProfileScreen() {
         }
 
         if (invitedMember) {
+          const typedInvitedMember = invitedMember as GroupMemberRow;
+
           const { error: updateMemberError } = await supabase
             .from("group_members")
             .update({
               user_id: user.id,
-              status: "joined",
+              status: GroupMemberStatus.Active,
             })
-            .eq("id", invitedMember.id);
+            .eq("id", typedInvitedMember.id);
 
           if (updateMemberError) {
             throw updateMemberError;
@@ -318,8 +365,8 @@ export default function ProfileScreen() {
               group_order_id: typedGroupOrder.id,
               user_id: user.id,
               invited_email: user.email ?? null,
-              role: "guest",
-              status: "joined",
+              role: GroupMemberRole.Guest,
+              status: GroupMemberStatus.Active,
             });
 
           if (insertMemberError) {
@@ -401,6 +448,7 @@ export default function ProfileScreen() {
 
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Account</Text>
+
             <Text style={styles.label}>Email</Text>
             <Text style={styles.value}>
               {profile?.email ?? "No email available"}

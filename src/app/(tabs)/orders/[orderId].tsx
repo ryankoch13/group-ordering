@@ -1,3 +1,4 @@
+import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useCallback, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -9,7 +10,6 @@ import {
   Text,
   View,
 } from "react-native";
-import { router, useFocusEffect, useLocalSearchParams } from "expo-router";
 
 import {
   canManageOrder,
@@ -19,10 +19,10 @@ import {
   getItemName,
   getItemTotalCents,
   getOrderById,
+  getOrderStatusLabel,
   getOrderTotalCents,
   OrderStatus,
   OrderWithItems,
-  statusLabels,
   subscribeToOrder,
   unsubscribeFromOrders,
   updateOrderStatus,
@@ -204,7 +204,7 @@ export default function OrderDetailsScreen() {
 
           <View style={[styles.statusBadge, getStatusBadgeStyle(order.status)]}>
             <Text style={styles.statusText}>
-              {statusLabels[order.status] ?? order.status}
+              {getOrderStatusLabel(order.status) ?? order.status}
             </Text>
           </View>
         </View>
@@ -262,7 +262,7 @@ export default function OrderDetailsScreen() {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Order details</Text>
 
-          <DetailRow label="Status" value={statusLabels[order.status]} />
+          <DetailRow label="Status" value={getOrderStatusLabel(order.status)} />
           <DetailRow label="Created" value={formatDate(order.created_at)} />
           <DetailRow label="Items" value={String(order.items.length)} />
           <DetailRow label="Total" value={formatCurrency(totalCents)} />
@@ -306,7 +306,8 @@ export default function OrderDetailsScreen() {
               </>
             ) : (
               <Text style={styles.emptyText}>
-                This order is already {statusLabels[order.status].toLowerCase()}.
+                This order is already{" "}
+                {getOrderStatusLabel(order.status).toLowerCase()}.
               </Text>
             )}
           </View>
